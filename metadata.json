@@ -1,0 +1,7 @@
+{
+  "name": "Happy Christmas",
+  "description": "一个由手势控制的高保真3D圣诞体验。握拳聚合圣诞树，张开手掌炸开，捏合抓取照片。",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
