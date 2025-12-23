@@ -1,38 +1,719 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>豪华互动圣诞树</title>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grand Luxury Interactive Christmas Tree</title>
+    
+    <!-- Styling -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Great+Vibes&family=Playfair+Display:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
     <style>
       body { margin: 0; background-color: #011810; overflow: hidden; font-family: sans-serif; }
-      /* Custom Scrollbar for Luxury Feel */
       ::-webkit-scrollbar { width: 6px; }
       ::-webkit-scrollbar-track { background: #022015; }
       ::-webkit-scrollbar-thumb { background: #D4AF37; border-radius: 3px; }
       .font-festive { font-family: 'Great Vibes', cursive; }
+      /* Loader */
+      .loader {
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        color: #FFD700; font-family: 'Cinzel', serif; font-size: 1.5rem;
+        text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+      }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "three": "https://esm.sh/three@^0.182.0",
-    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.4.2",
-    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
-    "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@^3.0.4",
-    "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@^0.10.22-rc.20250304",
-    "zustand": "https://esm.sh/zustand@^5.0.9"
-  }
-}
-</script>
+
+    <!-- Import Map: Pins versions and includes jsx-runtime -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "three": "https://esm.sh/three@0.160.0",
+        "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.14?external=react,react-dom,three",
+        "@react-three/drei": "https://esm.sh/@react-three/drei@9.96.1?external=react,react-dom,three,@react-three/fiber",
+        "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
+        "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@0.10.9",
+        "zustand": "https://esm.sh/zustand@4.5.0?external=react"
+      }
+    }
+    </script>
+
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <link rel="stylesheet" href="/index.css">
 </head>
-  <body>
+<body>
     <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useRef, useMemo, Suspense, useLayoutEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame, useThree } from '@react-three/fiber';
+        import { OrbitControls, PerspectiveCamera, Environment, Image, Instance, Instances } from '@react-three/drei';
+        import { EffectComposer, Bloom, Vignette, Noise } from '@react-three/postprocessing';
+        import { create } from 'zustand';
+        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+        // --- TYPES & CONSTANTS ---
+        const AppState = {
+            FORMED: 'FORMED',
+            CHAOS: 'CHAOS',
+            FOCUSED: 'FOCUSED'
+        };
+
+        const HandGesture = {
+            UNKNOWN: 'UNKNOWN',
+            CLOSED_FIST: 'Closed_Fist',
+            OPEN_PALM: 'Open_Palm',
+            PINCH: 'Pinch',
+            POINTING: 'Pointing_Up'
+        };
+
+        const PALETTE = {
+            GOLD: new THREE.Color('#FFD700'),
+            ROSE_GOLD: new THREE.Color('#B76E79'),
+            EMERALD: new THREE.Color('#50C878'),
+            DARK_GREEN: new THREE.Color('#023020'),
+            RED: new THREE.Color('#C41E3A'),
+            WHITE: new THREE.Color('#FFFFFF')
+        };
+
+        // --- MATH UTILS ---
+        const randomInSphere = (radius) => {
+            const u = Math.random();
+            const v = Math.random();
+            const theta = 2 * Math.PI * u;
+            const phi = Math.acos(2 * v - 1);
+            const r = Math.cbrt(Math.random()) * radius;
+            const sinPhi = Math.sin(phi);
+            return new THREE.Vector3(
+                r * sinPhi * Math.cos(theta),
+                r * sinPhi * Math.sin(theta),
+                r * Math.cos(phi)
+            );
+        };
+
+        const randomOnCone = (height, bottomRadius) => {
+            const y = Math.random() * height;
+            const relativeY = y / height;
+            const currentRadius = bottomRadius * (1 - relativeY);
+            const angle = Math.random() * Math.PI * 2;
+            const x = Math.cos(angle) * currentRadius;
+            const z = Math.sin(angle) * currentRadius;
+            return new THREE.Vector3(x, y - height / 2, z);
+        };
+
+        // --- STORE ---
+        const useAppStore = create((set) => ({
+            appState: AppState.FORMED,
+            setAppState: (appState) => set({ appState }),
+            
+            gesture: HandGesture.UNKNOWN,
+            setGesture: (gesture) => set({ gesture }),
+            
+            handPosition: { x: 0.5, y: 0.5 },
+            setHandPosition: (handPosition) => set({ handPosition }),
+            
+            photos: [],
+            addPhoto: (url) => set((state) => ({ photos: [...state.photos, url] })),
+            clearPhotos: () => set({ photos: [] }),
+            
+            selectedPhotoIndex: null,
+            setSelectedPhotoIndex: (index) => set({ selectedPhotoIndex: index }),
+            
+            rotationY: 0,
+            setRotationY: (rotationY) => set({ rotationY }),
+        }));
+
+        // --- SHADERS ---
+        const FoliageShaderMaterial = {
+            uniforms: {
+                uTime: { value: 0 },
+                uColor: { value: new THREE.Color(PALETTE.EMERALD) },
+                uGold: { value: new THREE.Color(PALETTE.GOLD) }
+            },
+            vertexShader: `
+                uniform float uTime;
+                attribute vec3 aTargetPos;
+                attribute vec3 aChaosPos;
+                attribute float aMixFactor;
+                attribute float aSize;
+                
+                varying vec3 vColor;
+                varying float vAlpha;
+
+                void main() {
+                vec3 pos = mix(aChaosPos, aTargetPos, aMixFactor);
+                
+                pos.x += sin(uTime * 2.0 + pos.y) * 0.1 * (1.0 - aMixFactor);
+                pos.y += cos(uTime * 1.5 + pos.x) * 0.1 * (1.0 - aMixFactor);
+
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                gl_PointSize = aSize * (300.0 / -mvPosition.z);
+                
+                vAlpha = 0.6 + 0.4 * sin(uTime + pos.x * 10.0);
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                uniform vec3 uGold;
+                varying float vAlpha;
+
+                void main() {
+                float dist = length(gl_PointCoord - vec2(0.5));
+                if (dist > 0.5) discard;
+                
+                vec3 finalColor = mix(uColor, uGold, smoothstep(0.0, 0.2, dist));
+                
+                gl_FragColor = vec4(finalColor, vAlpha);
+                }
+            `
+        };
+
+        // --- COMPONENTS ---
+
+        // 1. Hand Manager
+        const HandManager = () => {
+            const videoRef = useRef(null);
+            const { setGesture, setHandPosition, setRotationY, appState, setAppState, setSelectedPhotoIndex } = useAppStore();
+            const [loaded, setLoaded] = useState(false);
+            const lastVideoTime = useRef(-1);
+            const requestRef = useRef(0);
+
+            useEffect(() => {
+                let handLandmarker = null;
+
+                const setupMediaPipe = async () => {
+                    const vision = await FilesetResolver.forVisionTasks(
+                        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+                    );
+                    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                        baseOptions: {
+                            modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                            delegate: "GPU"
+                        },
+                        runningMode: "VIDEO",
+                        numHands: 1
+                    });
+                    setLoaded(true);
+                    startWebcam();
+                };
+
+                const startWebcam = async () => {
+                    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                        try {
+                            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                            if (videoRef.current) {
+                                videoRef.current.srcObject = stream;
+                                videoRef.current.addEventListener('loadeddata', predictWebcam);
+                            }
+                        } catch (e) {
+                            console.error("Camera access denied", e);
+                        }
+                    }
+                };
+
+                const predictWebcam = () => {
+                    if (!handLandmarker || !videoRef.current) return;
+
+                    let startTimeMs = performance.now();
+                    if (videoRef.current.currentTime !== lastVideoTime.current) {
+                        lastVideoTime.current = videoRef.current.currentTime;
+                        const results = handLandmarker.detectForVideo(videoRef.current, startTimeMs);
+                        
+                        processResults(results);
+                    }
+                    requestRef.current = requestAnimationFrame(predictWebcam);
+                };
+
+                setupMediaPipe();
+
+                return () => {
+                    if(requestRef.current) cancelAnimationFrame(requestRef.current);
+                    if(handLandmarker) handLandmarker.close();
+                };
+            }, []);
+
+            const processResults = (results) => {
+                if (results.landmarks && results.landmarks.length > 0) {
+                    const landmarks = results.landmarks[0];
+                    
+                    const cx = 1 - landmarks[9].x; 
+                    const cy = landmarks[9].y;
+                    
+                    setHandPosition({ x: cx, y: cy });
+
+                    const thumbTip = landmarks[4];
+                    const indexTip = landmarks[8];
+                    const middleTip = landmarks[12];
+                    const ringTip = landmarks[16];
+                    const pinkyTip = landmarks[20];
+                    const wrist = landmarks[0];
+
+                    const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+                    
+                    const isFist = [indexTip, middleTip, ringTip, pinkyTip].every(tip => {
+                        return Math.hypot(tip.x - wrist.x, tip.y - wrist.y) < 0.3;
+                    });
+
+                    let currentGesture = HandGesture.UNKNOWN;
+
+                    if (isFist) {
+                        currentGesture = HandGesture.CLOSED_FIST;
+                    } else if (pinchDist < 0.05) {
+                        currentGesture = HandGesture.PINCH;
+                    } else {
+                        currentGesture = HandGesture.OPEN_PALM;
+                    }
+
+                    setGesture(currentGesture);
+
+                    if (currentGesture === HandGesture.CLOSED_FIST) {
+                        setAppState(AppState.FORMED);
+                        setSelectedPhotoIndex(null);
+                    }
+                    
+                    if (currentGesture === HandGesture.OPEN_PALM && appState !== AppState.CHAOS) {
+                        if (appState === AppState.FORMED) {
+                            setAppState(AppState.CHAOS);
+                        }
+                    }
+
+                    if (appState === AppState.CHAOS && currentGesture === HandGesture.OPEN_PALM) {
+                        const targetRot = (cx - 0.5) * Math.PI * 2; 
+                        setRotationY(targetRot);
+                    }
+                }
+            };
+
+            return (
+                <div className="fixed bottom-4 right-4 w-32 h-24 bg-black/50 border border-yellow-500 rounded-lg overflow-hidden z-50 pointer-events-none">
+                    <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover opacity-50 transform scale-x-[-1]"
+                    />
+                    {!loaded && <div className="absolute inset-0 flex items-center justify-center text-xs text-yellow-400">Loading CV...</div>}
+                </div>
+            );
+        };
+
+        // 2. Tree System Helpers
+        const OrnamentInstance = ({ data, index }) => {
+            const ref = useRef(null);
+            const { appState } = useAppStore();
+            
+            useFrame((state, delta) => {
+                if (!ref.current) return;
+                const targetMix = appState === AppState.FORMED ? 1 : 0;
+                data.mix = THREE.MathUtils.lerp(data.mix, targetMix, delta * (1 + index % 3)); 
+                const pos = new THREE.Vector3().lerpVectors(data.chaos, data.target, data.mix);
+                ref.current.position.copy(pos);
+                ref.current.rotation.x += delta;
+                ref.current.rotation.y += delta;
+                const s = THREE.MathUtils.lerp(0.1, 1, data.mix); 
+                const scale = appState === AppState.CHAOS ? 1 : s;
+                ref.current.scale.setScalar(scale);
+            });
+            return <Instance ref={ref} />;
+        };
+
+        const PhotoInstance = ({ url, index, registerRef }) => {
+            const groupRef = useRef(null);
+            const { appState, selectedPhotoIndex } = useAppStore();
+            const { camera } = useThree();
+            
+            const treePos = useMemo(() => randomOnCone(18, 9), []);
+            const chaosPos = useMemo(() => randomInSphere(12), []);
+            
+            useLayoutEffect(() => {
+                registerRef(groupRef.current);
+                return () => registerRef(null);
+            }, [registerRef]);
+
+            useFrame((state, delta) => {
+                if (!groupRef.current) return;
+                
+                const isSelected = selectedPhotoIndex === index;
+
+                let targetPos = new THREE.Vector3();
+                let targetScale = 1;
+
+                if (isSelected) {
+                    const direction = new THREE.Vector3();
+                    state.camera.getWorldDirection(direction);
+                    const dist = 15;
+                    targetPos.copy(state.camera.position).add(direction.multiplyScalar(dist));
+                    
+                    // Safe cast for standard PerspectiveCamera setup
+                    const pCam = state.camera;
+                    if (pCam.isPerspectiveCamera) {
+                        const vFov = THREE.MathUtils.degToRad(pCam.fov);
+                        const visibleHeight = 2 * Math.tan(vFov / 2) * dist;
+                        const visibleWidth = visibleHeight * pCam.aspect;
+                        targetScale = (visibleWidth / 2.8) / 1.4; 
+                    } else {
+                        targetScale = 3;
+                    }
+                } else if (appState === AppState.FORMED) {
+                    targetPos.copy(treePos);
+                    targetScale = 1.0;
+                } else {
+                    targetPos.copy(chaosPos);
+                    targetScale = 1.5;
+                }
+
+                const speed = isSelected ? 8 : 3;
+                groupRef.current.position.lerp(targetPos, delta * speed);
+                
+                const currentScale = groupRef.current.scale.x;
+                const nextScale = THREE.MathUtils.lerp(currentScale, targetScale, delta * speed);
+                groupRef.current.scale.setScalar(nextScale);
+                
+                if (isSelected) {
+                    groupRef.current.lookAt(camera.position);
+                    groupRef.current.quaternion.copy(camera.quaternion);
+                } else if (appState === AppState.CHAOS) {
+                    groupRef.current.lookAt(camera.position);
+                    groupRef.current.rotateZ(Math.sin(state.clock.elapsedTime + index) * 0.1);
+                } else {
+                    groupRef.current.lookAt(targetPos.x * 2, targetPos.y, targetPos.z * 2);
+                }
+            });
+
+            return (
+                <group ref={groupRef}>
+                    <mesh position={[0, -0.15, -0.05]}> 
+                        <boxGeometry args={[1.4, 1.6, 0.02]} />
+                        <meshStandardMaterial color="#f8f8f8" roughness={0.8} />
+                    </mesh>
+                    <Image 
+                        url={url} 
+                        scale={[1.2, 0.9]} 
+                        position={[0, 0.1, 0.02]} 
+                        transparent={false} 
+                        opacity={1}
+                        side={THREE.DoubleSide}
+                    />
+                </group>
+            );
+        };
+
+        // 3. Tree System
+        const TreeSystem = () => {
+            const { appState, rotationY, photos, selectedPhotoIndex, setSelectedPhotoIndex, gesture } = useAppStore();
+            
+            const foliageGeoRef = useRef(null);
+            const foliageMatRef = useRef(null);
+            const ornamentGroupRef = useRef(null);
+            const photoRefs = useRef([]);
+
+            const starShape = useMemo(() => {
+                const shape = new THREE.Shape();
+                const points = 5;
+                const outerRadius = 0.8;
+                const innerRadius = 0.4;
+                for (let i = 0; i < points * 2; i++) {
+                    const angle = (i * Math.PI) / points - Math.PI / 2;
+                    const radius = i % 2 === 0 ? outerRadius : innerRadius;
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) shape.moveTo(x, y);
+                    else shape.lineTo(x, y);
+                }
+                shape.closePath();
+                return shape;
+            }, []);
+
+            const extrudeSettings = useMemo(() => ({
+                depth: 0.2, bevelEnabled: true, bevelThickness: 0.1, bevelSize: 0.05, bevelSegments: 2
+            }), []);
+            
+            const COUNT_FOLIAGE = 3000;
+            const COUNT_ORNAMENTS = 150;
+            const COUNT_GREEN = 600;
+
+            const foliageData = useMemo(() => {
+                const targetPositions = [];
+                const chaosPositions = [];
+                const sizes = [];
+                const mixFactors = []; 
+
+                for (let i = 0; i < COUNT_FOLIAGE; i++) {
+                const target = randomOnCone(20, 8);
+                const chaos = randomInSphere(15);
+                targetPositions.push(target.x, target.y, target.z);
+                chaosPositions.push(chaos.x, chaos.y, chaos.z);
+                sizes.push(Math.random() * 0.2 + 0.1);
+                mixFactors.push(0);
+                }
+                
+                return {
+                    target: new Float32Array(targetPositions),
+                    chaos: new Float32Array(chaosPositions),
+                    size: new Float32Array(sizes),
+                    mix: new Float32Array(mixFactors)
+                };
+            }, []);
+
+            const ornamentData = useMemo(() => {
+                const main = new Array(COUNT_ORNAMENTS).fill(0).map((_, i) => {
+                    const target = randomOnCone(18, 9);
+                    const chaos = randomInSphere(20);
+                    const type = Math.random() > 0.5 ? 'ball' : 'box';
+                    const color = Math.random() > 0.3 ? PALETTE.GOLD : PALETTE.RED;
+                    return { id: `main-${i}`, target, chaos, type, color, currentPos: chaos.clone(), mix: 0 };
+                });
+                const green = new Array(COUNT_GREEN).fill(0).map((_, i) => {
+                    const target = randomOnCone(18, 8.5);
+                    const chaos = randomInSphere(20);
+                    return { id: `green-${i}`, target, chaos, type: 'green_ball', color: PALETTE.EMERALD, currentPos: chaos.clone(), mix: 0 };
+                });
+                return [...main, ...green];
+            }, []);
+
+            useFrame((state, delta) => {
+                const time = state.clock.getElapsedTime();
+                
+                if (appState === AppState.CHAOS && gesture === HandGesture.PINCH && selectedPhotoIndex === null && photos.length > 0) {
+                    let minDistance = Infinity;
+                    let closestIndex = -1;
+                    const origin = new THREE.Vector3(0, 0, 0);
+                    photos.forEach((_, i) => {
+                        const group = photoRefs.current[i];
+                        if (group) {
+                            const dist = group.position.distanceTo(origin);
+                            if (dist < minDistance) {
+                                minDistance = dist;
+                                closestIndex = i;
+                            }
+                        }
+                    });
+                    if (closestIndex !== -1) setSelectedPhotoIndex(closestIndex);
+                } else if (gesture !== HandGesture.PINCH && selectedPhotoIndex !== null) {
+                    setSelectedPhotoIndex(null);
+                }
+
+                if (ornamentGroupRef.current) {
+                    if (appState === AppState.CHAOS) {
+                        if (selectedPhotoIndex === null) {
+                            ornamentGroupRef.current.rotation.y = THREE.MathUtils.lerp(ornamentGroupRef.current.rotation.y, rotationY, delta * 2);
+                        }
+                    } else {
+                        ornamentGroupRef.current.rotation.y += delta * 0.1;
+                    }
+                }
+
+                if (foliageMatRef.current) foliageMatRef.current.uniforms.uTime.value = time;
+
+                if (foliageGeoRef.current) {
+                const mixAttr = foliageGeoRef.current.attributes.aMixFactor;
+                const targetVal = appState === AppState.FORMED ? 1 : 0;
+                for (let i = 0; i < COUNT_FOLIAGE; i++) {
+                    const current = mixAttr.getX(i);
+                    const diff = targetVal - current;
+                    const speed = 2.0 + (i % 10) * 0.1; 
+                    mixAttr.setX(i, current + diff * delta * speed);
+                }
+                mixAttr.needsUpdate = true;
+                }
+            });
+
+            return (
+                <group ref={ornamentGroupRef}>
+                <points>
+                    <bufferGeometry ref={foliageGeoRef}>
+                    <bufferAttribute attach="attributes-aTargetPos" count={COUNT_FOLIAGE} array={foliageData.target} itemSize={3} />
+                    <bufferAttribute attach="attributes-aChaosPos" count={COUNT_FOLIAGE} array={foliageData.chaos} itemSize={3} />
+                    <bufferAttribute attach="attributes-aSize" count={COUNT_FOLIAGE} array={foliageData.size} itemSize={1} />
+                    <bufferAttribute attach="attributes-aMixFactor" count={COUNT_FOLIAGE} array={foliageData.mix} itemSize={1} />
+                    </bufferGeometry>
+                    <shaderMaterial ref={foliageMatRef} args={[FoliageShaderMaterial]} transparent depthWrite={false} blending={THREE.AdditiveBlending} />
+                </points>
+
+                <Instances range={COUNT_ORNAMENTS}>
+                    <sphereGeometry args={[0.3, 16, 16]} />
+                    <meshStandardMaterial color={PALETTE.RED} roughness={0.1} metalness={0.9} />
+                    {ornamentData.filter(o => o.type === 'ball').map((o, i) => (
+                        <OrnamentInstance key={o.id} data={o} index={i} />
+                    ))}
+                </Instances>
+
+                <Instances range={COUNT_ORNAMENTS}>
+                    <boxGeometry args={[0.4, 0.4, 0.4]} />
+                    <meshStandardMaterial color={PALETTE.GOLD} roughness={0.2} metalness={1} />
+                    {ornamentData.filter(o => o.type === 'box').map((o, i) => (
+                        <OrnamentInstance key={o.id} data={o} index={i} />
+                    ))}
+                </Instances>
+
+                <Instances range={COUNT_GREEN}>
+                    <sphereGeometry args={[0.075, 12, 12]} />
+                    <meshStandardMaterial color={PALETTE.EMERALD} roughness={0.5} metalness={0.5} />
+                    {ornamentData.filter(o => o.type === 'green_ball').map((o, i) => (
+                        <OrnamentInstance key={o.id} data={o} index={i} />
+                    ))}
+                </Instances>
+
+                {photos.map((url, i) => (
+                    <PhotoInstance 
+                        key={url + i} 
+                        url={url} 
+                        index={i} 
+                        registerRef={(el) => photoRefs.current[i] = el}
+                    />
+                ))}
+                
+                <mesh position={[0, 10.5, 0]}>
+                    <extrudeGeometry args={[starShape, extrudeSettings]} />
+                    <meshStandardMaterial color={PALETTE.GOLD} emissive={PALETTE.GOLD} emissiveIntensity={0.5} toneMapped={false} />
+                </mesh>
+                </group>
+            );
+        };
+
+        // 4. UI Overlay
+        const UIOverlay = () => {
+            const { appState, photos, addPhoto, clearPhotos } = useAppStore();
+            const fileInputRef = useRef(null);
+
+            const handleFileChange = (e) => {
+                if (e.target.files && e.target.files[0]) {
+                const url = URL.createObjectURL(e.target.files[0]);
+                addPhoto(url);
+                }
+            };
+
+            return (
+                <div className="absolute inset-0 pointer-events-none flex flex-col justify-between items-center p-8 z-10 font-sans">
+                
+                <div className="mt-4 text-center">
+                    <h1 className="text-6xl md:text-8xl text-transparent bg-clip-text bg-gradient-to-b from-yellow-200 via-yellow-400 to-yellow-600 font-festive drop-shadow-[0_0_10px_rgba(255,215,0,0.5)]">
+                    Happy Christmas
+                    </h1>
+                </div>
+
+                <div className="flex flex-col items-center w-full max-w-4xl space-y-4 mb-4">
+                    
+                    <div className="flex flex-col items-center justify-center space-y-2 opacity-90 transition-all duration-500 mb-2">
+                        {appState === AppState.FORMED && (
+                            <div className="text-white bg-black/60 px-6 py-2 rounded-full backdrop-blur-sm border border-yellow-500/20 text-sm shadow-[0_0_10px_rgba(0,0,0,0.5)]">
+                                ✋ <strong>张开手掌</strong> 炸开圣诞树
+                            </div>
+                        )}
+                        {appState === AppState.CHAOS && (
+                            <div className="text-white bg-black/60 px-6 py-2 rounded-full backdrop-blur-sm border border-yellow-500/20 text-sm shadow-[0_0_10px_rgba(0,0,0,0.5)]">
+                                ✊ <strong>握拳</strong> 聚合 &nbsp; | &nbsp; 🤏 <strong>捏合</strong> 抓取照片
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex items-center gap-4 pointer-events-auto bg-black/60 p-4 rounded-xl border border-emerald-900/50">
+                        <button 
+                            onClick={() => fileInputRef.current?.click()}
+                            className="bg-gradient-to-r from-yellow-600 to-yellow-400 hover:from-yellow-500 hover:to-yellow-300 text-black font-bold py-2 px-6 rounded shadow-[0_0_15px_rgba(255,215,0,0.4)] transition-all text-sm"
+                        >
+                            添加美好回忆 +
+                        </button>
+                        
+                        {photos.length > 0 && (
+                            <button 
+                                onClick={clearPhotos}
+                                className="bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-800 py-2 px-4 rounded transition-all text-sm"
+                            >
+                                清除照片 ({photos.length})
+                            </button>
+                        )}
+
+                        <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            className="hidden" 
+                            accept="image/*"
+                            onChange={handleFileChange}
+                        />
+                    </div>
+                    
+                    <div className="text-emerald-800/60 text-xs">
+                        by DLD
+                    </div>
+                </div>
+                </div>
+            );
+        };
+
+        // 5. Main Experience
+        const Experience = () => {
+            const { appState } = useAppStore();
+
+            return (
+                <Canvas
+                className="w-full h-full"
+                gl={{ antialias: false, powerPreference: "high-performance" }}
+                dpr={[1, 2]}
+                >
+                <PerspectiveCamera makeDefault position={[0, 0, 35]} fov={50} />
+                
+                <OrbitControls 
+                    enableZoom={true} 
+                    enablePan={false} 
+                    autoRotate={appState === AppState.FORMED}
+                    autoRotateSpeed={0.5}
+                    maxPolarAngle={Math.PI / 1.5}
+                    minPolarAngle={Math.PI / 3}
+                />
+
+                <ambientLight intensity={0.2} color="#023020" />
+                <pointLight position={[10, 10, 10]} intensity={1} color="#FFD700" />
+                <pointLight position={[-10, -10, 10]} intensity={1} color="#C41E3A" />
+                <spotLight 
+                    position={[0, 50, 0]} 
+                    angle={0.5} 
+                    penumbra={1} 
+                    intensity={2} 
+                    color="#FFF" 
+                    castShadow 
+                />
+
+                <Environment preset="city" />
+
+                <TreeSystem />
+
+                <EffectComposer disableNormalPass>
+                    <Bloom 
+                        luminanceThreshold={0.8} 
+                        mipmapBlur 
+                        intensity={1.5} 
+                        radius={0.4}
+                    />
+                    <Vignette eskil={false} offset={0.1} darkness={0.6} />
+                    <Noise opacity={0.05} />
+                </EffectComposer>
+                </Canvas>
+            );
+        };
+
+        // 6. App Root
+        const App = () => {
+            return (
+                <div className="relative w-screen h-screen bg-gradient-to-b from-[#011810] to-[#000000] overflow-hidden">
+                <Suspense fallback={<div className="loader">正在加载奢华体验...</div>}>
+                    <Experience />
+                </Suspense>
+                <UIOverlay />
+                <HandManager />
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+<script type="module" src="/index.tsx"></script>
 </body>
 </html>
